@@ -1,0 +1,538 @@
+---
+title: "CoSAM Weekly report"
+author: "Data Team"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+### Load necesary libraries
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, include = TRUE)
+
+library(tidyverse)
+library(redcapAPI) # for redcap data extraction
+library(here)
+library(lubridate)
+library(kableExtra)
+library(janitor)
+library(table1)
+library(readr)
+library(ggplot2)
+library(DT)
+library(data.table)
+library(haven)
+library(stringr)
+library(tidyr)
+```
+
+```{r}
+link = "/srv/shiny-server/cosam/processed_data/"
+```
+
+```{r}
+report_start_date <- as.Date("2025-03-01")
+report_end_date <- as.Date("2025-05-22")
+```
+
+Weekly report starting `r report_start_date` and ending `r report_end_date`
+
+```{r include=FALSE}
+##Extract screening data
+cosam_scr_token <- "6FF072B1EAE4262708BE224AB01530EC"
+cosam_scr_url <- "https://www.cosamtrial.org/redcap/api/"
+cosam_scr_con <- redcapConnection(url = cosam_scr_url, token = cosam_scr_token)
+ 
+forms <- exportInstruments(rcon = cosam_scr_con)
+arms <- exportArms(rcon = cosam_scr_con)
+ 
+```
+
+```{r include=FALSE}
+cosam_followup_token <- "A362BF50132658BAD7AB56049D94ABD8"
+cosam_followup_url <- "https://www.cosamtrial.org/redcap/api/"
+cosam_followup_con <- redcapConnection(url = cosam_followup_url, token = cosam_followup_token)
+ 
+forms <- exportInstruments(rcon = cosam_followup_con)
+arms <- exportArms(rcon = cosam_followup_con)
+```
+
+```{r include=FALSE}
+# #c("section_1screening_details",
+#             "section_2_inclusion_part_a",
+#             "section_2_inclusion_part_b",
+#             "section_3_exclusion",
+#             "section_4_eligibility",
+#             "section_5_consent",
+#             "section_6_enrolment",
+#             "section_7_baseline_procedure_check",
+#              "section_8_randomization")
+
+cosam_screening_raw <- exportRecords(
+  rcon = cosam_scr_con,
+  records = NULL,
+  forms = NULL,
+  labels = TRUE,
+  dates = TRUE,
+  survey = FALSE,
+  factors = TRUE,
+  dag = T,
+  checkboxLabels = TRUE
+)
+
+date_vars <- c("date_randomization_ra", "date_scr", "dob_scr", "data_collector_date_enr", "reviewer_date_enr", "data_collector_date_ra", "reviewer2_date_ra"
+)
+ 
+#class(cosam_screening_raw$reviewer2_date_ra)
+
+#  transformation to each variable in date_vars
+walk(date_vars, function(var) {
+  cosam_screening_raw[[var]] <<- as.Date(format(
+    as.POSIXct(as.character(zap_labels(cosam_screening_raw[[var]])), tz = "Africa/Nairobi"),
+    tz = "Africa/Nairobi"
+  ))
+})
+
+#dput(names(cosam_screening_raw))
+#List your date columns 
+
+cosam_screening_raw$sid <- as.character(cosam_screening_raw$sid)
+
+screening_details <- cosam_screening_raw %>% filter(!is.na(section_1screening_details_complete))
+screening_details <- screening_details[, colSums(!is.na(screening_details)) > 0]
+#remove duplicates, retain last record
+screening_details <- screening_details %>% group_by(sid) %>% filter(redcap_repeat_instance == max(redcap_repeat_instance)) %>% ungroup()
+
+inclusion_part_a <- cosam_screening_raw %>% filter(!is.na(section_2_inclusion_part_a_complete))
+inclusion_part_a <- inclusion_part_a[, colSums(!is.na(inclusion_part_a)) > 0]
+inclusion_part_a <- inclusion_part_a %>% select(-c("redcap_event_name","redcap_data_access_group"))
+
+inclusion_part_b <- cosam_screening_raw %>% filter(!is.na(section_2_inclusion_part_b_complete))
+inclusion_part_b <- inclusion_part_b[, colSums(!is.na(inclusion_part_b)) > 0]
+#remove duplicates, retain last record
+inclusion_part_b <- inclusion_part_b %>% group_by(sid) %>% filter(redcap_repeat_instance == max(redcap_repeat_instance)) %>% ungroup()
+inclusion_part_b <- inclusion_part_b %>% select(-c("redcap_event_name","redcap_data_access_group", "redcap_repeat_instrument", "redcap_repeat_instance"))
+
+exclusion <- cosam_screening_raw %>% filter(!is.na(section_3_exclusion_complete))
+exclusion <- exclusion[, colSums(!is.na(exclusion)) > 0]
+exclusion <- exclusion %>% group_by(sid) %>% filter(redcap_repeat_instance == max(redcap_repeat_instance)) %>% ungroup()
+exclusion <- exclusion %>% select(-c("redcap_event_name","redcap_data_access_group", "redcap_repeat_instrument", "redcap_repeat_instance"))
+
+eligibility <- cosam_screening_raw %>% filter(!is.na(section_4_eligibility_complete))
+eligibility <- eligibility[, colSums(!is.na(eligibility)) > 0]
+eligibility <- eligibility %>% group_by(sid) %>% filter(redcap_repeat_instance == max(redcap_repeat_instance)) %>% ungroup()
+eligibility <- eligibility %>% select(-c("redcap_event_name","redcap_data_access_group", "redcap_repeat_instrument", "redcap_repeat_instance"))
+
+# consent <- cosam_screening_raw %>% filter(!is.na(section_5_consent_complete))
+# consent <- consent[, colSums(!is.na(consent)) > 0]
+# consent <- consent %>% select(-c("redcap_event_name","redcap_data_access_group"))
+
+enrolment <- cosam_screening_raw %>% filter(!is.na(section_6_enrolment_complete))
+enrolment <- enrolment[, colSums(!is.na(enrolment)) > 0]
+enrolment <- enrolment %>% select(-c("redcap_event_name","redcap_data_access_group"))
+
+# baseline_procedure_check <- cosam_screening_raw %>% filter(!is.na(section_7_baseline_procedure_check_complete))
+# baseline_procedure_check <- baseline_procedure_check[, colSums(!is.na(baseline_procedure_check)) > 0]
+# baseline_procedure_check <- baseline_procedure_check %>% select(-c("redcap_event_name","redcap_data_access_group"))
+
+randomization <- cosam_screening_raw %>% filter(!is.na(section_8_randomization_complete))
+randomization <- randomization[, colSums(!is.na(randomization)) > 0]
+randomization <- randomization %>% select(-c("redcap_event_name","redcap_data_access_group"))
+
+# #merge into a single dataset
+screening_data <- screening_details %>% left_join(inclusion_part_a, by="sid")
+screening_data <- screening_data %>% left_join(inclusion_part_b, by="sid")
+screening_data <- screening_data %>% left_join(exclusion, by="sid")
+screening_data <- screening_data %>% left_join(eligibility, by="sid")
+screening_data <- screening_data %>% left_join(enrolment, by="sid")
+screening_data <- screening_data %>% left_join(randomization, by="sid")
+
+#class(screening_data$date_consent_scr)
+
+```
+
+```{r include=FALSE}
+cosam_followup_raw <- exportRecords(
+  rcon = cosam_followup_con,
+  records = NULL,
+  forms = NULL,
+  labels = TRUE,
+  dates = TRUE,
+  survey = FALSE,
+  factors = TRUE,
+  dag = T,
+  checkboxLabels = TRUE
+)
+
+date_vars <- c()
+ 
+#class(cosam_screening_raw$reviewer2_date_ra)
+
+#  transformation to each variable in date_vars
+walk(date_vars, function(var) {
+  cosam_followup_raw[[var]] <<- as.Date(format(
+    as.POSIXct(as.character(zap_labels(cosam_followup_raw[[var]])), tz = "Africa/Nairobi"),
+    tz = "Africa/Nairobi"
+  ))
+})
+
+```
+
+Screening summaries
+
+```{r echo=FALSE}
+#prepare dataset
+
+screening_data <- screening_data %>%
+  mutate(arm_ra = sub(".*, ", "", randomization_arm_ra))
+
+#1. Filter by dates
+
+screening_data_weekly <- screening_data %>%
+  filter(date_scr >= report_start_date & date_scr <= report_end_date)
+
+#summary(screening_data_weekly$date_scr)
+
+#2. Filter by kenyan sites
+
+#table(screening_data_weekly$study_site_scr)
+#summary(screening_data_weekly$date_scr, useNA = always) 
+
+
+screening_data_weekly <- screening_data_weekly %>%
+  filter(study_site_scr %in% c("Migori", "Homa Bay","Coast General", "Mbagathi")) 
+
+##. Generate summaries
+
+#dput(names(screening_data_weekly))
+
+screening_summaries <- screening_data_weekly %>%
+  group_by(study_site_scr) %>%
+  summarize(
+    `Transitioned to RUTF` = sum(rutf_scr == "Yes", na.rm = TRUE),
+    Screened = sum(!is.na(sid), na.rm = TRUE),
+    Eligible = sum(eligible_scr == "Yes", na.rm = TRUE),
+    Ineligible = sum(eligible_scr == "No", na.rm = TRUE),
+    Consented = sum(caregiver_consent_scr == "Yes", na.rm = TRUE),
+    Baseline_completed = sum(base_quest_complete_enr == "Yes", na.rm = TRUE),
+    Randomized = sum(!is.na(date_randomization_ra), na.rm = TRUE), 
+    SOC = sum(arm_ra == "Standard of Care", na.rm = TRUE),
+    Antimicrobial = sum(arm_ra == "Antimicrobials", na.rm = TRUE),
+    Psychosocial = sum(arm_ra == "Psychosocial Support", na.rm = TRUE),
+    RUTF = sum(arm_ra == "Reformulated RUTF", na.rm = TRUE),
+    Combined = sum(arm_ra == "Combined", na.rm = TRUE)
+    )%>%
+rename(Site = study_site_scr)
+
+screening_summaries %>%
+  kbl() %>%
+  kable_styling() 
+
+save(screening_summaries, file = "/srv/shiny-server/cosam/processed_data/screening_summaries.RData")
+
+#table(screening_data_weekly$arm_ra)                                                                                                                                                                                             #check_df <- screening_data %>%
+  #select(sid, randomization_arm_ra, arm_ra)
+
+#table(check_df$arm_ra)
+
+```
+<h4>Readmission summaries</h4>
+```{r echo=FALSE}
+readmission_summaries <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+  group_by(redcap_data_access_group) %>%
+  filter(redcap_event_name == "extra_visit_arm_1")%>%
+  filter(visit_date_extravisit >= report_start_date & visit_date_extravisit <= report_end_date)%>%
+  summarize(
+    readmission = sum(visit_reason_extravisit == "Hospitalization (Overnight stay)"))%>%
+  rename(Site = redcap_data_access_group)
+
+readmission_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(readmission_summaries, file = "/srv/shiny-server/cosam/processed_data/readmission_summaries.RData")
+#table(cosam_followup_raw$redcap_event_name)
+
+check_df <- cosam_followup_raw %>%
+  filter(visit_reason_extravisit == "Other")%>%
+  select(usi,other_specify_extravisit,study_site_extravisit)
+```
+<h4>Exit summaries</h4>
+```{r echo=FALSE}
+exit_summaries <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+  group_by(redcap_data_access_group) %>%
+  filter(redcap_event_name == "participant_exit_arm_1")%>%
+  filter(date_exit >= report_start_date & date_exit <= report_end_date)%>%
+  summarize(
+    exited = sum(!is.na(date_exit)))%>%
+  rename(Site = redcap_data_access_group)
+
+exit_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(exit_summaries, file = "/srv/shiny-server/cosam/processed_data/exit_summaries.RData")
+
+```
+<h4>Death summaries</h4>
+```{r echo=FALSE}
+death_summaries <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+  group_by(redcap_data_access_group) %>%
+  filter(redcap_event_name == "autopsy_arm_1")%>%
+  filter(death_date_va >= report_start_date & death_date_va <= report_end_date)%>%
+    summarize(
+    deceased = sum(!is.na(death_date_va)))%>%
+  rename(Site = redcap_data_access_group)
+
+death_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(death_summaries, file = "/srv/shiny-server/cosam/processed_data/death_summaries.RData")
+
+```
+<h4>Withdrawal summaries</h4>
+```{r echo=FALSE}
+withdrawal_summaries <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+  group_by(redcap_data_access_group) %>%
+  filter(redcap_event_name == "participant_exit_arm_1")%>%
+  filter(date_exit >= report_start_date & date_exit <= report_end_date)%>%
+    summarize(
+    withdrawal = sum(type_exit == "Voluntary withdrawal"))%>%
+  rename(Site = redcap_data_access_group)
+
+withdrawal_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(withdrawal_summaries, file = "/srv/shiny-server/cosam/processed_data/withdrawal_summaries.RData")
+
+```
+<h4>Consented not randomised summaries</h4>
+```{r echo=FALSE}
+consented_not_randomised_summaries <- screening_data_weekly %>%
+  group_by(study_site_scr) %>%
+      summarize(
+    consented_not_randomised = sum(caregiver_consent_scr == "Yes" & is.na(date_randomization_ra))) %>%
+rename(Site = study_site_scr)
+
+consented_not_randomised_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(consented_not_randomised_summaries, file = "/srv/shiny-server/cosam/processed_data/consented_not_randomised_summaries.RData")
+```
+<h4>Sae summaries</h4> 
+```{r echo=FALSE}
+sae_summaries <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+  group_by(redcap_data_access_group) %>%
+  filter(redcap_event_name == "adverse_event_arm_1")%>%
+  filter(event_date_ae >= report_start_date & event_date_ae <= report_end_date)%>%
+    summarize(
+    sae = sum(meet_sae_criteria_ae == "Yes"))%>%
+  rename(Site = redcap_data_access_group)
+
+sae_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(sae_summaries, file = "/srv/shiny-server/cosam/processed_data/sae_summaries.RData")
+
+```
+<h4>Cumulative enrolments</h4>
+```{r echo=FALSE}
+enrolment_summaries <- screening_data_weekly %>%
+  group_by(study_site_scr) %>%
+      summarize(
+    enrolled = sum(!is.na(date_randomization_ra)))%>%
+rename(Site = study_site_scr)
+
+enrolment_summaries  %>%
+  kbl() %>%
+  kable_styling()
+
+save(enrolment_summaries, file = "/srv/shiny-server/cosam/processed_data/enrolment_summaries.RData")
+check_df <- screening_data_weekly %>%
+  filter(study_site_scr == "Mbagathi") %>%
+  select(sid, date_scr, date_randomization_ra)
+
+table(screening_data_weekly$study_site_scr)
+
+```
+<h4>Follow up visits</h4>
+```{r echo=FALSE}
+#table(cosam_followup_raw$redcap_event_name)
+
+schedule_df <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"),
+         redcap_event_name %in% c("follow_up__week_2_arm_1", "follow_up__week_4_arm_1", "follow_up__week_6_arm_1", "follow_up__week_8_arm_1", "follow_up__week_12_arm_1", "follow_up__week_24_arm_1"))%>%
+  select(usi, redcap_data_access_group, redcap_event_name,form_date_fup)
+
+#class(cosam_screening_raw$date_randomization_ra)
+
+#class(cosam_screening_raw$date_randomization_ra)
+
+projected_dates_df <- cosam_screening_raw %>%
+  select(usi = usi_rand, redcap_data_access_group, date_randomization_ra) %>%
+  filter(!if_all(-redcap_data_access_group, is.na)) %>%
+  mutate( date_randomization_ra = as.Date(date_randomization_ra),
+          wk2_target_date = date_randomization_ra + (7*2), 
+            wk2_open_date = wk2_target_date - 7,
+           wk2_close_date = wk2_target_date + 7,
+           wk4_target_date = date_randomization_ra + (7*4), 
+            wk4_open_date = wk4_target_date - 7,
+           wk4_close_date = wk4_target_date + 7,
+          wk6_target_date = date_randomization_ra + (7*6), 
+            wk6_open_date = wk6_target_date - 7,
+           wk6_close_date = wk6_target_date + 7,
+          wk8_target_date = date_randomization_ra + (7*8), 
+            wk8_open_date = wk8_target_date - 7,
+           wk8_close_date = wk8_target_date + 7,
+          wk12_target_date = date_randomization_ra + (7*12), 
+            wk12_open_date = wk12_target_date - 7,
+           wk12_close_date = wk12_target_date + 7,
+          wk24_target_date = date_randomization_ra + (7*24), 
+            wk24_open_date = wk24_target_date - 7,
+           wk24_close_date = wk24_target_date + 7)
+
+completed_visits_df <- cosam_followup_raw %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"),
+         redcap_event_name %in% c("follow_up__week_2_arm_1", "follow_up__week_4_arm_1", "follow_up__week_6_arm_1", "follow_up__week_8_arm_1", "follow_up__week_12_arm_1", "follow_up__week_24_arm_1"))%>%
+  select(usi, redcap_event_name, form_date_fup) %>%
+  mutate(timepoint = str_extract(redcap_event_name, "(?<=__)(.*?)(?=_arm)")) %>%
+  select(-redcap_event_name)
+
+completed_visits_df_wide <- completed_visits_df %>%
+pivot_wider(
+  id_cols = usi,         # Unique identifier
+  names_from = timepoint,      # Column whose values become new column names
+  values_from = form_date_fup,      # Column(s) whose values fill the new columns
+  names_glue = "attended_date_{timepoint}"
+)
+
+schedule_full_df <- completed_visits_df_wide %>%
+  left_join(projected_dates_df, by = "usi")
+```
+
+<h5>Completed visits</h5>
+```{r echo=FALSE}
+attended_week2 <- schedule_full_df %>%
+  group_by(redcap_data_access_group) %>%
+  filter(attended_date_week_2 >= report_start_date & attended_date_week_2 <= report_end_date) %>%
+  summarize(completed_week2 = sum(!is.na(attended_date_week_2)))
+  
+attended_week2 %>%
+  kbl() %>%
+  kable_styling()
+save(attended_week2, file = "/srv/shiny-server/cosam/processed_data/attended_week2.RData")
+
+attended_week4 <- schedule_full_df %>%
+  group_by(redcap_data_access_group) %>%
+  filter(attended_date_week_4 >= report_start_date & attended_date_week_4 <= report_end_date) %>%
+  summarize(completed_week4 = sum(!is.na(attended_date_week_4)))
+
+attended_week4%>%
+  kbl() %>%
+  kable_styling()
+
+save(attended_week4, file = "/srv/shiny-server/cosam/processed_data/attended_week4.RData")
+
+attended_week6 <- schedule_full_df %>%
+  group_by(redcap_data_access_group) %>%
+  filter(attended_date_week_6 >= report_start_date & attended_date_week_6 <= report_end_date) %>%
+  summarize(completed_week6 = sum(!is.na(attended_date_week_6)))
+
+attended_week6%>%
+  kbl() %>%
+  kable_styling()
+
+save(attended_week6, file = "/srv/shiny-server/cosam/processed_data/attended_week6.RData")
+
+attended_week8 <- schedule_full_df %>%
+  group_by(redcap_data_access_group) %>%
+  filter(attended_date_week_8 >= report_start_date & attended_date_week_8 <= report_end_date) %>%
+  summarize(completed_week8 = sum(!is.na(attended_date_week_8)))
+
+attended_week8%>%
+  kbl() %>%
+  kable_styling()
+
+save(attended_week8, file = "/srv/shiny-server/cosam/processed_data/attended_week8.RData")
+
+# attended_week12 <- schedule_full_df %>%
+#   group_by(redcap_data_access_group) %>%
+#   filter(attended_date_week_12 >= report_start_date & attended_date_week_12 <= report_end_date) %>%
+#   summarize(completed_week6 = sum(!is.na(attended_date_week_12)))
+# 
+# attended_week12%>%
+#   kbl() %>%
+#   kable_styling()
+# 
+# save(attended_week12, file = "/srv/shiny-server/cosam/processed_data/attended_week12.RData")
+
+# attended_week24 <- schedule_full_df %>%
+#   group_by(redcap_data_access_group) %>%
+#   filter(attended_date_week_24 >= report_start_date & attended_date_week_24 <= report_end_date) %>%
+#   summarize(completed_week24 = sum(!is.na(attended_date_week_24)))
+# 
+# attended_week24%>%
+#   kbl() %>%
+#   kable_styling()
+# 
+# save(attended_week24, file = "/srv/shiny-server/cosam/processed_data/attended_week24.RData")
+```
+
+```{r echo=FALSE}
+#<h5>Booked/scheduled visits</h5>
+# names(schedule_full_df)[grepl("target_date", names(schedule_full_df), ignore.case = TRUE)]
+# 
+# # Summarize only the available columns
+# scheduled_visits_summaries <- projected_dates_df %>%
+#   filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+#   group_by(redcap_data_access_group) %>%
+#   summarize(
+#     scheduled_wk2 = sum(wk2_target_date>= report_start_date | wk2_target_date <= report_end_date),
+#     scheduled_wk4 = sum(wk4_target_date>= report_start_date | wk4_target_date <= report_end_date),
+#     scheduled_wk6 = sum(wk6_target_date>= report_start_date | wk6_target_date <= report_end_date),
+#     scheduled_wk8 = sum(wk8_target_date>= report_start_date | wk8_target_date <= report_end_date),
+#     scheduled_wk12 = sum(wk12_target_date>= report_start_date | wk12_target_date <= report_end_date),
+#     scheduled_wk24 = sum(wk24_target_date>= report_start_date | wk24_target_date <= report_end_date),
+#   )
+
+```
+<h5>Missed visits</h5>
+```{r echo=FALSE}
+schedule_full_df2 <- completed_visits_df_wide %>%
+  full_join(projected_dates_df, by = "usi")
+
+check_df <- schedule_full_df2 %>%
+  filter(redcap_data_access_group == "coast_general_hosp")
+#drop all the RIP
+rip_df <- cosam_followup_raw %>%
+  select(usi, death_date_va) %>%
+  filter(!is.na(death_date_va))
+
+schedule_full_df3 <- anti_join(schedule_full_df2, rip_df, by = "usi")
+
+missed_visit_summaries <- schedule_full_df3 %>%
+  filter(redcap_data_access_group %in% c("coast_general_hosp","homa_bay", "migori","mbagathi_hospital"))%>%
+  group_by(redcap_data_access_group) %>%
+  summarize(missed_wk2 = sum(wk2_close_date < today() & is.na(attended_date_week_2)))
+
+missed_visit_summaries %>%
+  kbl() %>%
+  kable_styling()
+
+save(missed_visit_summaries, file = "/srv/shiny-server/cosam/processed_data/missed_visit_summaries.RData")
+```
+
